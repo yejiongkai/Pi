@@ -17,6 +17,7 @@ sys.path.append(os.path.join(root, "object_track/pysot"))
 sys.path.append(os.path.join(root, "object_track/weights"))
 
 from object_track.track_system import Track_System
+from PID_Control import Gesture_PID_Control
 
 """
 mode:
@@ -102,6 +103,7 @@ class Control_Manager(object):
         self.is_gesture = False
         self.gesture_init_num = 0
         self.pitch, self.roll, self.yaw = None, None, None
+        self.gesture_pid_control = Gesture_PID_Control(self.video_width, self.video_height)
         # ------- Reset -------- #
         self.is_stm32_reset = False
         # ------- Bionic ------- #
@@ -172,6 +174,7 @@ class Control_Manager(object):
         send_data = " ".join(list_bytes)
         self.Serial_Send(send_data)
 
+    # 主要使用以下两个函数，控制舵机角度
     def Set_Servo_Shoulder(self, value=0, enable=True):
         self.servos[3].ratio = max(min(self.servos[3].ratio + value, self.servos[3].ratio_range), 0)
         self.servos[3].enable = enable
@@ -210,6 +213,18 @@ class Control_Manager(object):
                           (self.track_system.bbox[0] + self.track_system.bbox[2],
                            self.track_system.bbox[1] + self.track_system.bbox[3]),
                           (0, 255, 0), 3)
+
+    def Gesture_Control(self):
+        # 目标丢失
+        if self.track_system.score < self.track_system.track_thresh:
+            value_v, value_h = self.gesture_pid_control.get_Control_Value(False, None, None)
+        else:
+            object_x, object_y = self.track_system.bbox[0] + self.track_system.bbox[2]/2, \
+                self.track_system.bbox[1] + self.track_system.bbox[3]/2
+            value_v, value_h = self.gesture_pid_control.get_Control_Value(True, object_x, object_y)
+
+        self.Set_Servo_Shoulder(value_v, True)
+        self.Set_Servo_Waist(value_h, True)
 
     def Serial_Rec(self):
         while not self.close:
@@ -494,7 +509,7 @@ class Control_Manager(object):
                     else:
                         self.gesture_init_num += 1
                 else:
-                    pass
+                    self.Gesture_Control()
                 self.Servo_Control()
 
             if self.is_video_trans:
