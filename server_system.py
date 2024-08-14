@@ -82,11 +82,13 @@ class Control_Manager(object):
         self.is_track = False
         self.is_first = True
         self.init_rect = None
-        self.track_epoch = 1
+        self.track_epoch = 0
         self.track_num = self.track_epoch
         self.track_system = Track_System(self)
         # ------- Detect ------- #
         self.is_detect = False
+        self.detect_epoch = 10
+        self.detect_num = 0
         # ------- Camera ------- #
         self.video_width, self.video_height, self.video_fps = 640, 480, 30
         self.is_camera_open = False
@@ -94,7 +96,12 @@ class Control_Manager(object):
         self.camera = cv2.VideoCapture("v4l2src device=/dev/video0 ! videoconvert ! video/x-raw, width={}, "
                                        "height={}, framerate={}/1 !  appsink".format(self.video_width,
                                                                                      self.video_height, self.video_fps),
-                                       cv2.CAP_GSTREAMER)
+                                                                                     cv2.CAP_GSTREAMER)
+        #self.camera = cv2.VideoCapture(0, cv2.CAP_V4L2)
+        #self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.video_height)
+        #self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.video_width)
+        #self.camera.set(cv2.CAP_PROP_FPS, self.video_fps)
+                                       
         # ------- Route -------- #
         self.is_route = False
         self.route_data = None
@@ -103,7 +110,7 @@ class Control_Manager(object):
         self.is_gesture = False
         self.gesture_init_num = 0
         self.pitch, self.roll, self.yaw = None, None, None
-        self.gesture_pid_control = Gesture_PID_Control(self.video_width, self.video_height)
+        self.gesture_pid_control = Gesture_PID_Control(640, 480)
         # ------- Reset -------- #
         self.is_stm32_reset = False
         # ------- Bionic ------- #
@@ -114,7 +121,7 @@ class Control_Manager(object):
         self.trans_width, self.trans_height, self.trans_fps = 320, 240, 30
         self.video_trans = cv2.VideoWriter(
                             "appsrc ! videoconvert ! x264enc tune=zerolatency bitrate=400 qp-max=20 "
-                            "qp-min=10 ! rtph264pay ! udpsink buffer-size=12000000 host=192.168.29.132 "
+                            "qp-min=10 ! rtph264pay ! udpsink buffer-size=12000000 host=192.168.137.1 "
                             "port=5000 async=true max-lateness=-1 qos-dscp=10 max-bitrate=200000000 ",
                             cv2.CAP_GSTREAMER, 0, self.trans_fps, (self.trans_width, self.trans_height),
                             True)
@@ -175,21 +182,39 @@ class Control_Manager(object):
         self.Serial_Send(send_data)
 
     # 主要使用以下两个函数，控制舵机角度
-    def Set_Servo_Shoulder(self, value=0, enable=True):
+    def Set_Servo_Shoulder(self, value=0, usetime=100, enable=True):
         self.servos[3].ratio = max(min(self.servos[3].ratio + value, self.servos[3].ratio_range), 0)
+        self.servos[3].use_time = usetime
         self.servos[3].enable = enable
         self.servos[4].ratio = max(min(self.servos[4].ratio - value, self.servos[4].ratio_range), 0)
+        self.servos[4].use_time = usetime
         self.servos[4].enable = enable
 
-    def Set_Servo_Waist(self, value=0, enable=True):
+    def Set_Servo_Waist(self, value=0, usetime=100, enable=True):
         self.servos[0].ratio = max(min(self.servos[0].ratio + value, self.servos[0].ratio_range), 0)
+        self.servos[0].use_time = usetime
         self.servos[0].enable = enable
 
     def Set_Servo_Reset(self):
         for i in range(9):
-            self.servos[i].ratio = self.servos[i].ratio_range / 2
-            self.servos[i].use_time = 5000
-            self.servos[i].enable = True
+            if i == 0 or i == 3 or i == 4:
+                if i == 3:
+                    self.servos[i].ratio = 24
+                    self.servos[i].enable = True
+                    self.servos[i].use_time = 5000
+                elif i == 4:
+                    self.servos[i].ratio = 156
+                    self.servos[i].enable = True
+                    self.servos[i].use_time = 5000
+                elif i == 0:
+                    self.servos[i].ratio = 180
+                    self.servos[i].enable = True
+                    self.servos[i].use_time = 5000
+            else:
+                self.servos[i].enable = False
+                self.servos[i].ratio = self.servos[i].ratio_range / 2
+                self.servos[i].use_time = 5000
+            
 
     def Track(self):
         if self.frame is None:
@@ -204,27 +229,51 @@ class Control_Manager(object):
                     self.track_system.Set_Template(self.frame, self.init_rect)
                     self.is_first = False
         else:
+            # if self.detect_num == self.detect_epoch:
+            #    self.track_system.Search_Object(self.frame)
+            #   self.detect_num = 0
+            # else:
+            #    self.detect_num += 1
+            
             if self.track_num == self.track_epoch:
                 self.track_system.Get_Track(self.frame)
                 self.track_num = 0
             else:
                 self.track_num += 1
-            cv2.rectangle(self.frame, (self.track_system.bbox[0], self.track_system.bbox[1]),
-                          (self.track_system.bbox[0] + self.track_system.bbox[2],
-                           self.track_system.bbox[1] + self.track_system.bbox[3]),
-                          (0, 255, 0), 3)
+            
+            if len(self.track_system.bbox) == 4:
+                cv2.rectangle(self.frame, (self.track_system.bbox[0], self.track_system.bbox[1]),
+                              (self.track_system.bbox[0] + self.track_system.bbox[2],
+                               self.track_system.bbox[1] + self.track_system.bbox[3]),
+                              (0, 255, 0), 3)
 
     def Gesture_Control(self):
         # 目标丢失
-        if self.track_system.score < self.track_system.track_thresh:
-            value_v, value_h = self.gesture_pid_control.get_Control_Value(False, None, None)
-        else:
-            object_x, object_y = self.track_system.bbox[0] + self.track_system.bbox[2]/2, \
-                self.track_system.bbox[1] + self.track_system.bbox[3]/2
-            value_v, value_h = self.gesture_pid_control.get_Control_Value(True, object_x, object_y)
-
-        self.Set_Servo_Shoulder(value_v, True)
-        self.Set_Servo_Waist(value_h, True)
+        if self.track_system:
+            if self.track_system.score < self.track_system.track_thresh:
+                value_v, value_h = 0, 0 # self.gesture_pid_control.get_Control_Value(False, None, None)
+            else:
+                object_x, object_y = self.track_system.bbox[0] + self.track_system.bbox[2] / 2, \
+                    self.track_system.bbox[1] + self.track_system.bbox[3] / 2
+                if abs(object_x-self.video_width/2) > 90:
+                    if object_x > self.video_width/2:
+                        value_h = 3
+                    else:
+                        value_h = -3
+                else:
+                    value_h = 0
+                
+                if abs(object_y-self.video_height/2) > 90:
+                    if object_y > self.video_height/2:
+                        value_v = 3
+                    else:
+                        value_v = -3
+                else:
+                    value_v = 0
+                # value_v, value_h = self.gesture_pid_control.get_Control_Value(True, object_x, object_y)
+    
+            self.Set_Servo_Shoulder(-value_v, 300, True)
+            self.Set_Servo_Waist(-value_h, 300, True)
 
     def Serial_Rec(self):
         while not self.close:
@@ -265,7 +314,7 @@ class Control_Manager(object):
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.setblocking(0)
         # ip_port = ('127.0.0.1', 3411)
-        ip_port = ('192.168.29.191', 3411)
+        ip_port = ('192.168.137.51', 3411)
         self.server.bind(ip_port)
         self.server.listen(5)
         self.inputs.append(self.server)
@@ -289,10 +338,10 @@ class Control_Manager(object):
                         es.append(s)
                         continue
                     if data != '':
-                        print('receive {} from {}'.format(data, s.getpeername()))
-                        while not self.is_finish:
-                                continue
                         try:
+                            print('receive {} from {}'.format(data, s.getpeername()))
+                            while not self.is_finish:
+                                    continue
                             command = eval(data)
                             self.cur_mode, self.arg = command[0], command[1]
                         except Exception as e:
@@ -327,8 +376,8 @@ class Control_Manager(object):
                     if send_data:
                         try:
                             s.send(send_data.encode('utf-8'))
-                        except ConnectionResetError:
-                            es.append(s)
+                        except Exception as e:
+                            es.append(str(e))
                             continue
 
             for s in es:
@@ -339,7 +388,7 @@ class Control_Manager(object):
                         self.outputs.remove(s)
                     s.close()
                     del self.message_queues[s]
-                except OSError:
+                except Exception:
                     continue
 
             time.sleep(0.01)
@@ -367,13 +416,13 @@ class Control_Manager(object):
                 if self.mode & (1 << 0):
                     if self.cur_mode == (1 << 0):
                         self.is_hand = True
-                        self.hand_data = self.arg.copy()
+                        self.hand_data = self.arg
 
                 # ------ 鱼形态 ------ #
                 if self.mode & (1 << 1):
                     if self.cur_mode == (1 << 1):
                         self.is_swim = True
-                        self.swim_data = self.arg.copy()
+                        self.swim_data = self.arg
 
                 # -------- 目标跟踪 ------- #
                 if self.mode & (1 << 2):
@@ -502,12 +551,12 @@ class Control_Manager(object):
                 pass
 
             if self.is_gesture:  # 控制前面三个舵机
-                if self.gesture_init_num < 500:
+                if self.gesture_init_num < 10:
                     if self.gesture_init_num == 0:
                         self.Message_Send("Gesture is initializing")
                         self.Set_Servo_Reset()
-                    else:
-                        self.gesture_init_num += 1
+
+                    self.gesture_init_num += 1
                 else:
                     self.Gesture_Control()
                 self.Servo_Control()

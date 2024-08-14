@@ -25,7 +25,7 @@ class Track_System(object):
     track_thresh = 0.5
     detect_thresh = 0.9
 
-    miss_object_thresh = 5
+    miss_object_thresh = 3
     miss_object_num = 1
 
     move_pred_epoch = 20
@@ -186,11 +186,11 @@ class Track_System(object):
                         self.server.Message_Send("-------Object loss---------")
             else:
                 self.miss_object_num += 1
-                self.center_pos += self.move_pred
-                self.center_pos[0] = min(max(0, self.center_pos[0]), frame.shape[0])
-                self.center_pos[1] = min(max(0, self.center_pos[1]), frame.shape[1])
-                self.bbox[0] = self.bbox[0] + self.move_pred[0]
-                self.bbox[1] = self.bbox[1] + self.move_pred[1]
+                #self.center_pos += self.move_pred
+                #self.center_pos[0] = min(max(0, self.center_pos[0]), frame.shape[0])
+                #self.center_pos[1] = min(max(0, self.center_pos[1]), frame.shape[1])
+                #self.bbox[0] = min(max(0, self.bbox[0] + self.move_pred[0]), frame.shape[0])
+                #self.bbox[1] = min(max(0, self.bbox[1] + self.move_pred[1]), frame.shape[1])
 
     def Search_Object(self, frame):
         print("-------Start search object--------")
